@@ -9,16 +9,25 @@ const { TextArea } = Input;
 function Chat() {
   const [userMessage, setUserMessage] = useState("");
   const [response, setResponse] = useState("");
+  const [loading, setLoading] = useState(false); // New state to control button loading
 
   const handleSend = async () => {
+    if (!userMessage.trim()) return; // Prevent empty messages
+    setLoading(true); // Set loading to true while waiting for response
+    setResponse(""); // Clear previous response
+
     try {
-      // Netlify functions are typically available at /.netlify/functions/<functionName>
+      // Make API call to Netlify function
       const res = await axios.post("/.netlify/functions/chat", {
         userMessage,
       });
+
       setResponse(res.data.botResponse);
     } catch (err) {
       console.error("Error:", err);
+      setResponse("Sorry, something went wrong. Please try again.");
+    } finally {
+      setLoading(false); // Stop loading spinner after response or error
     }
   };
 
@@ -30,8 +39,13 @@ function Chat() {
         placeholder="Ask me anything..."
         value={userMessage}
         onChange={(e) => setUserMessage(e.target.value)}
+        style={{ marginBottom: 16 }}
       />
-      <Button type="primary" onClick={handleSend} style={{ marginTop: 16 }}>
+      <Button
+        type="primary"
+        onClick={handleSend}
+        loading={loading} // Ant Design Button's loading state
+      >
         Send
       </Button>
 
