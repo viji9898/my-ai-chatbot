@@ -1,4 +1,3 @@
-// netlify/functions/chat.js
 const { Pinecone } = require("@pinecone-database/pinecone");
 const OpenAI = require("openai");
 const faunadb = require("faunadb");
@@ -13,46 +12,58 @@ exports.handler = async function (event) {
       };
     }
 
-    // Env vars
+    // Environment variables
     const openaiKey = process.env.OPENAI_API_KEY;
     const pineconeKey = process.env.PINECONE_API_KEY;
     const faunaKey = process.env.FAUNA_KEY;
 
-    // 1) OpenAI client (new style)
+    if (!openaiKey || !pineconeKey || !faunaKey) {
+      throw new Error("Missing required API keys");
+    }
+
+    // Initialize OpenAI client
     const openai = new OpenAI({ apiKey: openaiKey });
 
-    // 2) Pinecone initialization
-    const pc = new Pinecone({ apiKey: pineconeKey });
+    // Initialize Pinecone
+    const pinecone = new Pinecone({ apiKey: pineconeKey });
+    const myIndex = pinecone.Index("my-chatbot-index");
 
-    // 3) Fauna setup
+    // Initialize FaunaDB client
     const q = faunadb.query;
     const faunaClient = new faunadb.Client({ secret: faunaKey });
 
-    // 4) Embed userMessage (OpenAI embeddings)
+    // Generate embedding using OpenAI
     const embeddingResponse = await openai.embeddings.create({
       model: "text-embedding-ada-002",
       input: userMessage,
     });
-    const userEmbedding = embeddingResponse.data[0].embedding; // array of floats
 
-    // 5) Query Pinecone "my-chatbot-index"
-    //    - Adjust topK if you want more or fewer chunks
-    //    - includeMetadata: true -> so we can read "match.metadata"
-    const myIndex = pc.Index("my-chatbot-index");
+    const userEmbedding = embeddingResponse.data[0]?.embedding;
+    if (!userEmbedding) {
+      throw new Error("Failed to generate embedding");
+    }
+
+    // Query Pinecone index
     const queryResponse = await myIndex.query({
       vector: userEmbedding,
       topK: 3,
       includeMetadata: true,
     });
 
-    // 6) Combine the retrieved text chunks into one context
-    //    - We assume each match.metadata has a "text" field
-    const relevantChunks = queryResponse.matches.map(
-      (match) => match.metadata.text
+    const relevantChunks = queryResponse.matches?.map(
+      (match) => match.metadata?.text
     );
+
+    if (!relevantChunks || relevantChunks.length === 0) {
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ botResponse: "I'm not sure." }),
+      };
+    }
+
     const context = relevantChunks.join("\n");
 
-    // 7) Construct a final prompt with context
+    // Construct the prompt
     const prompt = `
       You are an AI assistant. The user question is:
       "${userMessage}"
@@ -63,14 +74,16 @@ exports.handler = async function (event) {
       Provide a helpful answer using only the context if relevant. If unsure, say "I'm not sure."
     `;
 
-    // 8) Create a chat completion with GPT
+    // Generate chat completion using GPT
     const chatResult = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: "gpt-4",
       messages: [{ role: "user", content: prompt }],
     });
-    const botResponse = chatResult.choices[0].message.content;
 
-    // 9) (Optional) Save the conversation to Fauna
+    const botResponse =
+      chatResult.choices[0]?.message?.content || "I'm not sure.";
+
+    // Save conversation to FaunaDB
     await faunaClient.query(
       q.Create(q.Collection("ChatLogs"), {
         data: {
@@ -81,7 +94,7 @@ exports.handler = async function (event) {
       })
     );
 
-    // 10) Return the chatbot answer
+    // Return response
     return {
       statusCode: 200,
       body: JSON.stringify({ botResponse }),
